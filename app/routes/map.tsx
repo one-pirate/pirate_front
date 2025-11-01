@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { api } from "~/services/backend";
 
 export default function Map() {
   const mapContainer = useRef<HTMLDivElement>(null);
@@ -19,6 +20,14 @@ export default function Map() {
 
     map.on("mousedown", (e) => {
       setPosition([e.lngLat.lat, e.lngLat.lng]);
+      api
+        .post("/map/send-coords", { lat: e.lngLat.lat, lng: e.lngLat.lng })
+        .then((response) => {
+          console.log("Coordinates sent successfully:", response);
+        })
+        .catch((err) => {
+          console.error("Failed to send coordinates:", err);
+        });
     });
 
     return () => map.remove(); // cleanup on unmount
