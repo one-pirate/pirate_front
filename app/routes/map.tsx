@@ -1,3 +1,4 @@
+import { Link } from "react-router";
 import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -5,7 +6,7 @@ import Chart from "chart.js/auto";
 
 // === BACKEND CALLS (compatibles avec ton nouveau backend Express) ===
 
-async function sendCoords(points: { lat: number; lng: number }[], spacing = 10) {
+async function sendCoords(points: { lat: number; lng: number }[], spacing: number) {
   const res = await fetch("http://localhost:3000/map/send-coords", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -44,6 +45,7 @@ export default function Home() {
   const [fullPath, setFullPath] = useState<{ lat: number; lng: number }[]>([]);
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [statusMessage, setStatusMessage] = useState("");
+  const [spacing, setSpacing] = useState(10); // New state for spacing
 
   // === INIT MAP ===
   useEffect(() => {
@@ -78,18 +80,33 @@ export default function Home() {
     });
 
     // Add point on click
-    map.on("click", async (e) => {
+    const clickHandler = (e: maplibregl.MapMouseEvent) => {
       const newPt = { lat: e.lngLat.lat, lng: e.lngLat.lng };
-      const newPoints = [...points, newPt];
-      setPoints(newPoints);
+      setPoints((currentPoints) => [...currentPoints, newPt]);
+    };
 
-      // Call backend to generate full path (points + intermediates)
-      const res = await sendCoords(newPoints, 10);
+    map.on("click", clickHandler);
+
+    return () => {
+      map.off("click", clickHandler);
+      map.remove();
+    };
+  }, []);
+
+  // === GET FULL PATH ===
+  useEffect(() => {
+    if (points.length === 0) {
+      setFullPath([]);
+      return;
+    }
+
+    const getFullPath = async () => {
+      const res = await sendCoords(points, spacing);
       setFullPath(res.all_points);
-    });
+    };
 
-    return () => map.remove();
-  }, [points]);
+    getFullPath();
+  }, [points, spacing]); // Add spacing to dependency array
 
   // === DRAW LINE ===
   useEffect(() => {
@@ -113,16 +130,8 @@ export default function Home() {
   };
 
   // === REMOVE LAST POINT ===
-  const deleteLastPoint = async () => {
-    const updated = points.slice(0, -1);
-    setPoints(updated);
-
-    if (updated.length > 0) {
-      const res = await sendCoords(updated, 10);
-      setFullPath(res.all_points);
-    } else {
-      setFullPath([]);
-    }
+  const deleteLastPoint = () => {
+    setPoints((currentPoints) => currentPoints.slice(0, -1));
   };
 
   // === VALIDATE PATH → PREDICT RISK ===
@@ -192,6 +201,22 @@ export default function Home() {
         style={{ height: "60vh", border: "2px solid #333" }}
       />
 
+      {/* SPACING SLIDER */}
+      <div className="field mt-6">
+        <label className="label">Spacing: {spacing}</label>
+        <div className="control">
+          <input
+            className="slider is-fullwidth is-info"
+            step="1"
+            min="10"
+            max="1000"
+            value={spacing}
+            type="range"
+            onChange={(e) => setSpacing(Number(e.target.value))}
+          />
+        </div>
+      </div>
+
       {/* BUTTONS */}
       <div className="flex gap-4 justify-center mt-6">
         <button
@@ -235,13 +260,14 @@ export default function Home() {
               <th>Lng</th>
               <th>Probabilité</th>
               <th>Prédiction</th>
+              <th>Explain</th>
             </tr>
           </thead>
 
           <tbody>
             {predictions.length === 0 ? (
               <tr>
-                <td colSpan={5} className="has-text-centered">
+                <td colSpan={6} className="has-text-centered">
                   Aucune donnée
                 </td>
               </tr>
@@ -257,6 +283,16 @@ export default function Home() {
                       : "N/A"}
                   </td>
                   <td>{p.prediction}</td>
+                  <td>
+                    <Link
+                      to={`/explain?lat=${p.lat}&lng=${p.lng}`}
+                      className="button is-info is-small"
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                    >
+                      Explain
+                    </Link>
+                  </td>
                 </tr>
               ))
             )}
