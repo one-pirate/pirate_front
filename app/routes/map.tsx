@@ -38,6 +38,7 @@ interface Prediction {
 export default function Home() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const lineRef = useRef<maplibregl.GeoJSONSource | null>(null);
+  const pointsRef = useRef<maplibregl.GeoJSONSource | null>(null); // New ref for points
   const chartRef = useRef<HTMLCanvasElement | null>(null);
   const chartInstance = useRef<Chart | null>(null);
 
@@ -77,6 +78,29 @@ export default function Home() {
       });
 
       lineRef.current = map.getSource("route") as maplibregl.GeoJSONSource;
+      
+      // Add source and layer for points
+      map.addSource("points", {
+        type: "geojson",
+        data: {
+          type: "FeatureCollection",
+          features: [],
+        },
+      });
+
+      map.addLayer({
+        id: "points-layer",
+        type: "circle",
+        source: "points",
+        paint: {
+          "circle-radius": 6,
+          "circle-color": "#B42222",
+          "circle-stroke-width": 1,
+          "circle-stroke-color": "#fff"
+        },
+      });
+
+      pointsRef.current = map.getSource("points") as maplibregl.GeoJSONSource;
     });
 
     // Add point on click
@@ -120,6 +144,26 @@ export default function Home() {
       properties: {},
     });
   }, [fullPath]);
+  
+  // === DRAW POINTS ===
+  useEffect(() => {
+    if (!pointsRef.current) return;
+
+    const features = points.map(p => ({
+      type: "Feature" as const,
+      geometry: {
+        type: "Point" as const,
+        coordinates: [p.lng, p.lat],
+      },
+      properties: {},
+    }));
+
+    pointsRef.current.setData({
+      type: "FeatureCollection",
+      features: features,
+    });
+  }, [points]);
+
 
   // === RESET ===
   const resetPoints = () => {
