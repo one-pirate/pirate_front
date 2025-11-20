@@ -1,42 +1,54 @@
+import { Link } from "react-router";
 import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import Chart from "chart.js/auto";
 
-// Backend API functions
-async function sendCoords(lat: number, lng: number) {
-  return fetch("http://localhost:3000/map/send-coords", {
+// === BACKEND CALLS (compatibles avec ton nouveau backend Express) ===
+
+async function sendCoords(points: { lat: number; lng: number }[], spacing: number) {
+  const res = await fetch("http://localhost:3000/map/send-coords", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ latitude: lat, longitude: lng }),
-  }).then((res) => res.json());
+    body: JSON.stringify({ points, spacing }),
+  });
+
+  if (!res.ok) throw new Error("Erreur sendCoords");
+  return res.json();
 }
 
-async function predictRisk(lat: number, lng: number) {
-  return fetch("http://localhost:3000/map/predict-risk", {
+async function predictRisk(coords: { lat: number; lng: number }[]) {
+  const res = await fetch("http://localhost:3000/map/predict-risk", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ latitude: lat, longitude: lng }),
-  }).then((res) => res.json());
+    body: JSON.stringify({ coords }),
+  });
+
+  if (!res.ok) throw new Error("Erreur predictRisk");
+  return res.json();
 }
 
 interface Prediction {
   lat: number;
   lng: number;
-  probability_success: number;
-  prediction: number;
+  probability_success: number | null;
+  prediction: number | null;
 }
 
 export default function Home() {
   const mapContainer = useRef<HTMLDivElement>(null);
-  const [points, setPoints] = useState<[number, number][]>([]);
-  const [predictions, setPredictions] = useState<Prediction[]>([]);
   const lineRef = useRef<maplibregl.GeoJSONSource | null>(null);
+  const pointsRef = useRef<maplibregl.GeoJSONSource | null>(null); // New ref for points
   const chartRef = useRef<HTMLCanvasElement | null>(null);
   const chartInstance = useRef<Chart | null>(null);
-  const [statusMessage, setStatusMessage] = useState<string>("");
 
-  // Init map
+  const [points, setPoints] = useState<{ lat: number; lng: number }[]>([]);
+  const [fullPath, setFullPath] = useState<{ lat: number; lng: number }[]>([]);
+  const [predictions, setPredictions] = useState<Prediction[]>([]);
+  const [statusMessage, setStatusMessage] = useState("");
+  const [spacing, setSpacing] = useState(10); // New state for spacing
+
+  // === INIT MAP ===
   useEffect(() => {
     if (!mapContainer.current) return;
 
@@ -48,103 +60,149 @@ export default function Home() {
       zoom: 2,
     });
 
-    // Add source/layer for line
     map.on("load", () => {
       map.addSource("route", {
         type: "geojson",
         data: {
           type: "Feature",
-          geometry: {
-            type: "LineString",
-            coordinates: [],
-          },
+          geometry: { type: "LineString", coordinates: [] },
           properties: {},
         },
       });
+
       map.addLayer({
         id: "route-line",
         type: "line",
         source: "route",
-        layout: { "line-join": "round", "line-cap": "round" },
-        paint: { "line-color": "#fbff00", "line-width": 4 },
+        paint: { "line-color": "#fff000", "line-width": 4 },
       });
+
       lineRef.current = map.getSource("route") as maplibregl.GeoJSONSource;
+      
+      // Add source and layer for points
+      map.addSource("points", {
+        type: "geojson",
+        data: {
+          type: "FeatureCollection",
+          features: [],
+        },
+      });
+
+      map.addLayer({
+        id: "points-layer",
+        type: "circle",
+        source: "points",
+        paint: {
+          "circle-radius": 6,
+          "circle-color": "#B42222",
+          "circle-stroke-width": 1,
+          "circle-stroke-color": "#fff"
+        },
+      });
+
+      pointsRef.current = map.getSource("points") as maplibregl.GeoJSONSource;
     });
 
-    // Handle click
-    map.on("click", async (e) => {
-      const newPoint: [number, number] = [e.lngLat.lng, e.lngLat.lat];
-      setPoints((prev) => [...prev, newPoint]);
+    // Add point on click
+    const clickHandler = (e: maplibregl.MapMouseEvent) => {
+      const newPt = { lat: e.lngLat.lat, lng: e.lngLat.lng };
+      setPoints((currentPoints) => [...currentPoints, newPt]);
+    };
 
-      // Send to backend
-      await sendCoords(e.lngLat.lat, e.lngLat.lng);
-    });
+    map.on("click", clickHandler);
 
-    return () => map.remove();
+    return () => {
+      map.off("click", clickHandler);
+      map.remove();
+    };
   }, []);
 
-  // Update line on map
+  // === GET FULL PATH ===
+  useEffect(() => {
+    if (points.length === 0) {
+      setFullPath([]);
+      return;
+    }
+
+    const getFullPath = async () => {
+      const res = await sendCoords(points, spacing);
+      setFullPath(res.all_points);
+    };
+
+    getFullPath();
+  }, [points, spacing]); // Add spacing to dependency array
+
+  // === DRAW LINE ===
   useEffect(() => {
     if (!lineRef.current) return;
     lineRef.current.setData({
       type: "Feature",
-      geometry: { type: "LineString", coordinates: points },
+      geometry: {
+        type: "LineString",
+        coordinates: fullPath.map((p) => [p.lng, p.lat]),
+      },
       properties: {},
+    });
+  }, [fullPath]);
+  
+  // === DRAW POINTS ===
+  useEffect(() => {
+    if (!pointsRef.current) return;
+
+    const features = points.map(p => ({
+      type: "Feature" as const,
+      geometry: {
+        type: "Point" as const,
+        coordinates: [p.lng, p.lat],
+      },
+      properties: {},
+    }));
+
+    pointsRef.current.setData({
+      type: "FeatureCollection",
+      features: features,
     });
   }, [points]);
 
-  // Reset points
+
+  // === RESET ===
   const resetPoints = () => {
     setPoints([]);
+    setFullPath([]);
     setPredictions([]);
     setStatusMessage("");
   };
 
-  // Delete last point
+  // === REMOVE LAST POINT ===
   const deleteLastPoint = () => {
-    setPoints((prev) => prev.slice(0, -1));
-    setPredictions((prev) => prev.slice(0, -1));
+    setPoints((currentPoints) => currentPoints.slice(0, -1));
   };
 
-  // Validate path (get predictions)
+  // === VALIDATE PATH → PREDICT RISK ===
   const validatePath = async () => {
-    const preds: Prediction[] = [];
-    for (const [lng, lat] of points) {
-      try {
-        const res = await predictRisk(lat, lng);
-        preds.push({
-          lat,
-          lng,
-          probability_success: res.model_output.probability_success,
-          prediction: res.model_output.prediction,
-        });
-      } catch (err) {
-        console.error("Prediction failed:", err);
-      }
+    if (fullPath.length === 0) return;
+
+    const res = await predictRisk(fullPath);
+
+    setPredictions(res.predictions);
+
+    if (res.global_risk > 0.5) {
+      setStatusMessage(
+        "⚠️ Attention : chemin risqué, probabilité élevée d'attaque !"
+      );
+    } else {
+      setStatusMessage("✔️ Chemin sûr selon le modèle.");
     }
-    setPredictions(preds);
-
-    // Calculate mean probability
-    const meanProb =
-      preds.reduce((acc, p) => acc + (p.probability_success ?? 0), 0) /
-      (preds.length || 1);
-
-    setStatusMessage(
-      meanProb > 0.5
-        ? "Attention : chemin risqué, probabilité élevée d'attaque !"
-        : "Chemin sûr selon le modèle."
-    );
   };
 
-  // Update Chart.js
+  // === CHART UPDATE ===
   useEffect(() => {
     if (!chartRef.current) return;
+
     const ctx = chartRef.current.getContext("2d");
     if (!ctx) return;
 
-    if (chartInstance.current) {
-      chartInstance.current.destroy();
-    }
+    if (chartInstance.current) chartInstance.current.destroy();
 
     chartInstance.current = new Chart(ctx, {
       type: "bar",
@@ -152,28 +210,23 @@ export default function Home() {
         labels: predictions.map((_, i) => `Point ${i + 1}`),
         datasets: [
           {
-            label: "Probabilité de succès",
+            label: "Probabilité de risque (%)",
             data: predictions.map((p) =>
               p.probability_success ? p.probability_success * 100 : 0
             ),
             backgroundColor: "#00aaff",
           },
           {
-            label: "Prédiction (0 = sûr, 1 = risqué)",
-            data: predictions.map((p) => p.prediction * 100),
+            label: "Prédiction (0=sûr, 1=risqué)",
+            data: predictions.map((p) => (p.prediction ?? 0) * 100),
             backgroundColor: "#ff4d4f",
           },
         ],
       },
       options: {
         responsive: true,
-        plugins: { legend: { position: "top" } },
         scales: {
-          y: {
-            min: 0,
-            max: 100,
-            ticks: { callback: (v) => `${v}%` },
-          },
+          y: { min: 0, max: 100, ticks: { callback: (v) => `${v}%` } },
         },
       },
     });
@@ -181,61 +234,69 @@ export default function Home() {
 
   return (
     <div className="container mx-auto p-4">
-      <h1 className="title is-3 mb-4">Navigation Pirate Risk</h1>
+      <h1 className="title is-3 mb-4 text-center">
+        Navigation Pirate Risk
+      </h1>
 
-      {/* Map */}
+      {/* MAP */}
       <div
         ref={mapContainer}
-        className="map-container"
-        style={{ width: "100%", height: "60vh", border: "1px solid #ccc" }}
+        className="rounded-lg shadow-md"
+        style={{ height: "60vh", border: "2px solid #333" }}
       />
 
-      {/* Buttons */}
-      {/* <div className="btn-container">
-        <button className="button button-danger" onClick={resetPoints}>
-          Reset
-        </button>
-        <button className="button button-warning" onClick={deleteLastPoint}>
-          Supprimer dernier point
-        </button>
-        <button className="button button-primary" onClick={validatePath}>
-          Valider le chemin
-        </button>
-      </div> */}
+      {/* SPACING SLIDER */}
+      <div className="field mt-6">
+        <label className="label">Spacing: {spacing}</label>
+        <div className="control">
+          <input
+            className="slider is-fullwidth is-info"
+            step="1"
+            min="10"
+            max="1000"
+            value={spacing}
+            type="range"
+            onChange={(e) => setSpacing(Number(e.target.value))}
+          />
+        </div>
+      </div>
 
-      {/* Buttons */}
+      {/* BUTTONS */}
       <div className="flex gap-4 justify-center mt-6">
         <button
-          className="px-6 py-2 rounded-lg bg-red-500 text-white font-semibold hover:bg-red-600 transition-colors duration-200 shadow-md hover:shadow-lg"
+          className="button is-danger px-6 py-2 shadow-lg"
           onClick={resetPoints}
         >
           Reset
         </button>
+
         <button
-          className="px-6 py-2 rounded-lg bg-yellow-400 text-gray-800 font-semibold hover:bg-yellow-500 transition-colors duration-200 shadow-md hover:shadow-lg"
+          className="button is-warning px-6 py-2 shadow-lg"
           onClick={deleteLastPoint}
         >
           Supprimer dernier point
         </button>
+
         <button
-          className="px-6 py-2 rounded-lg bg-blue-500 text-white font-semibold hover:bg-blue-600 transition-colors duration-200 shadow-md hover:shadow-lg"
+          className="button is-primary px-6 py-2 shadow-lg"
           onClick={validatePath}
         >
           Valider le chemin
         </button>
       </div>
 
-
-
-      {/* Status */}
+      {/* STATUS */}
       {statusMessage && (
-        <div className="notification is-info mt-4">{statusMessage}</div>
+        <div className="notification is-info mt-4 has-text-centered text-lg">
+          {statusMessage}
+        </div>
       )}
 
-      {/* Table */}
-      <div className="table-container mt-4">
-        <h3 className="subtitle is-5">Détail par point</h3>
-        <table className="table is-fullwidth is-striped is-hoverable">
+      {/* TABLE */}
+      <div className="table-container mt-6">
+        <h3 className="subtitle is-5">Détails des prédictions</h3>
+
+        <table className="table is-striped is-hoverable is-fullwidth">
           <thead>
             <tr>
               <th>#</th>
@@ -243,35 +304,48 @@ export default function Home() {
               <th>Lng</th>
               <th>Probabilité</th>
               <th>Prédiction</th>
+              <th>Explain</th>
             </tr>
           </thead>
+
           <tbody>
-            {predictions.length === 0 && (
+            {predictions.length === 0 ? (
               <tr>
-                <td colSpan={5} className="has-text-centered">
-                  Aucune prédiction
+                <td colSpan={6} className="has-text-centered">
+                  Aucune donnée
                 </td>
               </tr>
+            ) : (
+              predictions.map((p, i) => (
+                <tr key={i}>
+                  <td>{i + 1}</td>
+                  <td>{p.lat.toFixed(4)}</td>
+                  <td>{p.lng.toFixed(4)}</td>
+                  <td>
+                    {p.probability_success !== null
+                      ? (p.probability_success * 100).toFixed(2) + "%"
+                      : "N/A"}
+                  </td>
+                  <td>{p.prediction}</td>
+                  <td>
+                    <Link
+                      to={`/explain?lat=${p.lat}&lng=${p.lng}`}
+                      className="button is-info is-small"
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                    >
+                      Explain
+                    </Link>
+                  </td>
+                </tr>
+              ))
             )}
-            {predictions.map((p, i) => (
-              <tr key={i}>
-                <td>{i + 1}</td>
-                <td>{p.lat.toFixed(4)}</td>
-                <td>{p.lng.toFixed(4)}</td>
-                <td>
-                  {p.probability_success !== undefined
-                    ? (p.probability_success * 100).toFixed(2) + "%"
-                    : "N/A"}
-                </td>
-                <td>{p.prediction}</td>
-              </tr>
-            ))}
           </tbody>
         </table>
       </div>
 
-      {/* Chart */}
-      <div className="chart-container mt-4">
+      {/* CHART */}
+      <div className="chart-container mt-6">
         <canvas ref={chartRef}></canvas>
       </div>
     </div>
