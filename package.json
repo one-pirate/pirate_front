@@ -17,6 +17,7 @@
     "isbot": "^5.1.31",
     "maplibre-gl": "^5.13.0",
     "react": "^19.1.1",
+    "react-chartjs-2": "^5.3.1",
     "react-dom": "^19.1.1",
     "react-router": "^7.9.2",
     "recharts": "^3.4.1"
